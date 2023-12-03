@@ -4,10 +4,11 @@ all: ProcssMngmntSim
 WARNINGS = -Wall
 DEBUG = -ggdb -fno-omit-frame-pointer
 OPTIMIZE = -O2
+SOURCE = main.c PrintArray.c
+HEADERS = PrintArray.h
 
-
-ProcssMngmntSim: Makefile main.c
-	$(CC) -o $@ $(WARNINGS) $(DEBUG) $(OPTIMIZE) main.c
+ProcssMngmntSim: Makefile $(SOURCE) $(HEADERS)
+	$(CC) -o $@ $(WARNINGS) $(DEBUG) $(OPTIMIZE) $(SOURCE)
 
 clean:
 	rm -f ProcssMngmntSim

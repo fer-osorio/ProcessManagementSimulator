@@ -108,9 +108,8 @@ void printTabularForm(void* data,           // -What we want to print.
                       const char* headers[],
                       const char* leftTags[]) {
     int aux, i, j;       // -Auxiliary variable and counters.
-    int columnLen = 18;  // -Length of the columns in spaces.
+    int columnLen = 10;  // -Length of the columns in spaces.
     int leftTagsLen = 3; // -Length of left tags (if any).
-    char indexStr[6];    // -In case of not having left tags.
     // -Determining the number of rows.
     int numRows = dataSize/numColumns;
     if(dataSize % numColumns != 0) numRows++;
@@ -141,13 +140,11 @@ void printTabularForm(void* data,           // -What we want to print.
     long long *data_ll; // -Interpreting data as long long's
     char buffer[20];     // -Holds the string representation of data elements
     for(i = 0; i < numRows; i++) {
-        printf("|");
-        if(leftTags != NULL) printCentered(leftTags[i], leftTagsLen);
-        else {
-            toString(i, indexStr);
-            printCentered(indexStr, leftTagsLen);
+        if(leftTags != NULL) {
+            printf("|");
+            printCentered(leftTags[i], leftTagsLen);
+            printf("|");
         }
-        printf("|");
         aux = i*numColumns;
         switch(datatype) {
             case _char:

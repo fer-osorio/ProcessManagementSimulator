@@ -24,37 +24,50 @@
 #include<time.h>
 #include"PrintArray.h"
 
-#define RAM_SIZE  10000
-#define SWAP_SIZE 20000
-#define BUFF_SIZE 1000
+#define SWAP_SIZE 10240 // 10 Kb
+#define RAM_SIZE  5120  // 5  Kb
+#define BUFF_SIZE 1024  // 1  Kb
 #define NAME_SIZE 4
 
 char ram[RAM_SIZE], swap[SWAP_SIZE];
 int currRamLoc = 0;    // Current RAM location
 int         ID = 0;    // Process ID
 
+char* ptrs_prcss[64];  // Pointer to process
+
+int sz_int = sizeof(int);
+
 typedef struct processheader {
     char name[NAME_SIZE];
     int  size; // Size in bytes.
+    int  TTP;  // Total time of processing.
+    int  PT;   // Processor time
 }ProcessHeader;
-
 int prcHeadSize = sizeof(ProcessHeader);
+
+// -Returns process size. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline int processSize(char* prc_dirc) {
+    return charToInt(&prc_dirc[NAME_SIZE]);
+}
 
 typedef struct page {
     int number;
     int   size;
     char* info;
 }Page;
-
 int pageSize = sizeof(Page);
 
 struct BUFFER {       // -New processes can be allocated just at the end.
     int firstIndexAvailable; // -We'll navigate the buffer with this index.
     int firstProcIndex;
+    int spaceAvailable;
     char memory[BUFF_SIZE];
-} buffer = {0,0};
+} buffer = {0,0,BUFF_SIZE};
 
 void printBytes(const char* bytes, int len);
+
+// Print the bytes of the buffer organized in its correspondent sections.
 void printBufferBytes();
 
 // -Allocates a new process in the buffer.
@@ -67,18 +80,43 @@ void loadProcess();
 
 void viewRAM();
 
+// Defined as Total_processing_time - Processor_time
+void Simulate(char* prc_dirc);
+
+// -Simulates all the process.
+void SimulateAll();
+
 int main (int argc, char *argv[])
 {
-    char name[4] = {0x11, 0x22, 0x33, 0x44};
+    char name[NAME_SIZE] = {'A', 'B', 'C', 0};
+    srand(time(NULL));
     newProcess(name, 3);
+    name[0]++;
     newProcess(name, 2);
+    name[1]++;
     newProcess(name, 4);
+    name[2]++;
+    newProcess(name, 5);
+    name[0]++;
+    newProcess(name, 7);
+    name[1]++;
+    newProcess(name, 6);
+    name[2]++;
+    newProcess(name, 8);
     printBufferBytes();
     printf("\n");
     loadProcess();
     loadProcess();
     loadProcess();
-    viewRAM ();
+    loadProcess();
+    loadProcess();
+    loadProcess();
+    loadProcess();
+    viewRAM();
+    SimulateAll();
+    viewRAM();
+    Simulate(&ram[4]);
+    viewRAM();
     return EXIT_SUCCESS;
 }
 
@@ -99,8 +137,8 @@ void printBufferBytes() {
     int k = 0; // Process counter.
     int t = 0; // Temporal
 
-    printf("---------------------------------------BUFFER--------------------"
-        "--------------\n");
+    printf("----------------------------BUFFER--------------------"
+        "--------\n\n");
     for(k = 0; i < buffer.firstIndexAvailable; k++, t = i, j = 0) {
         printf("Process %d:-----------------------------------------------"
         "-----\nName:  ", k+1);
@@ -118,35 +156,69 @@ void printBufferBytes() {
 
         printf("\nPage |  number   ||   size    ||         info*         |\n");
 
-        while(i-t < size.in) {
+        for(i += sz_int*2; i-t < size.in; ) {
             printf("  %d  ", j++);
             printBytes(&buffer.memory[i], 4); i += 4;
             printBytes(&buffer.memory[i], 4); i += 4;
             printBytes(&buffer.memory[i], 8); i += 8;
             printf("\n");
         }
+        printf("\n");
     }
 }
 
 void newProcess(char name[NAME_SIZE], int numofPages) {
-    // Warning, we are supposing there is enough space
-    // to allocate a new process in the BUFFER.
-    int size = NAME_SIZE + 4 + pageSize * numofPages;
-    // -Preparing the conversion from int to char[4].
-    IntChar tmp = {size};
+    int size = prcHeadSize + pageSize * numofPages, i;
+    if(size > buffer.spaceAvailable) { // Not enough space
+        printf("\nCould not allocate new process in buffer...\n");
+        return;
+    }
+    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
     // -Setting name and updating current index.
-    for(int i = 0; i < NAME_SIZE; i++)
+    for(i = 0; i < NAME_SIZE - 1; i++)
         buffer.memory[buffer.firstIndexAvailable++] = name[i];
+    buffer.memory[buffer.firstIndexAvailable++] = 0;
+    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
     // -Setting size and updating current index.
-    buffer.memory[buffer.firstIndexAvailable++] = tmp.ch[0];
-    buffer.memory[buffer.firstIndexAvailable++] = tmp.ch[1];
-    buffer.memory[buffer.firstIndexAvailable++] = tmp.ch[2];
-    buffer.memory[buffer.firstIndexAvailable++] = tmp.ch[3];
+    IntToChar(size,&buffer.memory[buffer.firstIndexAvailable]);
+    buffer.firstIndexAvailable += sz_int;
+    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
+    // Total process time and processor time
+    // TTP
+    IntToChar(rand()%15 + 2,&buffer.memory[buffer.firstIndexAvailable]);
+    buffer.firstIndexAvailable += sz_int;
+    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+    // PT = 0
+    IntToChar(0, &buffer.memory[buffer.firstIndexAvailable]);
+    buffer.firstIndexAvailable += sz_int;
+    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
     // -Allocating pages
     Page bf = {0,pageSize,NULL};
-    for(; bf.number < numofPages; bf.number++, buffer.firstIndexAvailable += pageSize)
-        memcpy(&buffer.memory[buffer.firstIndexAvailable], &bf, pageSize);
+    // Supposing pageSize is a multiple of four.
+    for(;bf.number < numofPages; bf.number++){
+        // Page number
+        memcpy(&buffer.memory[buffer.firstIndexAvailable], &bf.number, sz_int);
+        buffer.firstIndexAvailable += sz_int;
+        if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+        // Page Size
+        memcpy(&buffer.memory[buffer.firstIndexAvailable], &bf.size, sz_int);
+        buffer.firstIndexAvailable += sz_int;
+        if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+        // Info
+        memcpy(&buffer.memory[buffer.firstIndexAvailable], &bf.info, sz_int*2);
+        buffer.firstIndexAvailable += sz_int*2;
+        if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+    }
+
+    buffer.spaceAvailable -= size; // -Updating space available.
 }
+
+// How the process is loaded in RAM?
+// | ID | Process header | Pages ... | ...
 
 void loadProcess() {
     // Supposing there is enough space in ram
@@ -155,6 +227,7 @@ void loadProcess() {
     ram[currRamLoc++] = _ID.ch[1];
     ram[currRamLoc++] = _ID.ch[2];
     ram[currRamLoc++] = _ID.ch[3];
+    int prcStart = currRamLoc;
     // Supposing the Buffer is not empty
     IntChar sz; // Process size
     sz.ch[0] = buffer.memory[buffer.firstProcIndex+4];
@@ -166,19 +239,8 @@ void loadProcess() {
     buffer.firstProcIndex += sz.in;
     currRamLoc += sz.in;
 
-    IntChar t; // Process time and processor time
-    srand(time(NULL)); t.in = rand() % 12;
-    // Process time
-    ram[currRamLoc++] = t.ch[0];
-    ram[currRamLoc++] = t.ch[1];
-    ram[currRamLoc++] = t.ch[2];
-    ram[currRamLoc++] = t.ch[3];
-    t.in = rand() % 4;
     // Processor time
-    ram[currRamLoc++] = t.ch[0];
-    ram[currRamLoc++] = t.ch[1];
-    ram[currRamLoc++] = t.ch[2];
-    ram[currRamLoc++] = t.ch[3];
+    ram[prcStart + prcHeadSize - 4] = rand()%3 + 1;;
 }
 
 void viewRAM() {
@@ -187,31 +249,63 @@ void viewRAM() {
         t, // Holds the value of 'i' temporarily
         c; // Counter of cycles
     int pageAmount;
-    IntChar _ID;
-    IntChar sz = {0};
+    int ibuff[4];
+    char cbuff[5];
+    IntChar sz = {0}, tp = {0};
     ProcessHeader ph;
 
-    printf("---------------------------------------RAM-----------------------"
+    printf("--------------------------------RAM-------------------------"
         "----------\n");
-    printf(" ID ||  Process  ||  #Pages  ||  RAM loc  |\n");
+    printf("|  ID   ||  Process  ||  #Pages  || RAM loc  ||   TPT    |"
+        "|    PT    |\n");
 
-    for(c = 0, i = 0; (t=i) + c*2 < currRamLoc; c++, i += sz.in) {
-        _ID.ch[0] = ram[i++];
-        _ID.ch[1] = ram[i++];
-        _ID.ch[2] = ram[i++];
-        _ID.ch[3] = ram[i++];
-        printf(" %d  |", _ID.in);
+    for(c = 0, i = 0; (t=i) + c < currRamLoc; c += sz_int, i += sz.in) {
+        // Printing ID
+        printBytesAsInt(&ram[i], sz_int, 7);
+        i += sz_int;
         // Retrieving process name.
-        for(j = 0; j < 4; j++) ph.name[j] = ram[i+j];
-        printBytes(ph.name, 4);
+        for(j = 0; j < NAME_SIZE; j++) ph.name[j] = ram[i+j];
+        printf("|");
+        printCentered(ph.name, 11);
+        printf("|");
+        i += sz_int;
         // Retrieving process size.
-        for(j = 0; j < 4; j++) sz.ch[j] = ram[i+4+j];
+        for(j = 0; j < 4; j++) sz.ch[j] = ram[i+j];
+        i += sz_int;
         // Naive way of calculating the number of pages.
         pageAmount = (sz.in - prcHeadSize)/pageSize;
-        printf("|     %d    |",pageAmount);
-        if(t < 10)                    printf("|     %d     |\n",t);
-        else if(10  <= t && t < 100)  printf("|     %d    |\n",t);
-        else if(100 <= t && t < 1000) printf("|    %d    |\n",t);
-        else                          printf("|    %d   |\n",t);
+        toString (pageAmount, cbuff);
+        ibuff[0] = pageAmount;
+        ibuff[1] = t;
+        // Total time of processing.
+        for(j = 0; j < 4; j++) tp.ch[j] = ram[i+j];
+        i += sz_int;
+        ibuff[2] = tp.in;
+        // Processor time
+        for(j = 0; j < 4; j++) tp.ch[j] = ram[i+j];
+        i += sz_int;
+        ibuff[3] = tp.in;
+        printTabularForm(ibuff, _int, 4, 4, NULL, NULL);
+        sz.in -= prcHeadSize;
+    }
+}
+
+void Simulate(char* prc_dirc) {
+    int ttp_ind = NAME_SIZE + sz_int, pt_ind = ttp_ind + sz_int;
+    int ttp = charToInt(&prc_dirc[ttp_ind]),  // -Getting TTP and PT
+        pt  = charToInt(&prc_dirc[pt_ind]);
+    ttp -= pt;
+    pt = rand()%3 + 1;
+    IntToChar(ttp, &prc_dirc[ttp_ind]);
+    IntToChar(pt, &prc_dirc[pt_ind]);
+}
+
+void SimulateAll() {
+    int prc_sz, i;
+    char* prc_ptr;
+    for(i = sz_int; i < currRamLoc; i += prc_sz + sz_int) {
+        prc_sz = charToInt(&ram[i + NAME_SIZE]);
+        prc_ptr = &ram[i];
+        Simulate(prc_ptr);
     }
 }
