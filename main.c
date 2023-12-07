@@ -29,26 +29,146 @@
 #define BUFF_SIZE 1024  // 1  Kb
 #define NAME_SIZE 4
 
-char ram[RAM_SIZE], swap[SWAP_SIZE];
-int currRamLoc = 0;    // Current RAM location
-int         ID = 0;    // Process ID
-
-char* ptrs_prcss[64];  // Pointer to process
-
 int sz_int = sizeof(int);
 
+struct RAM {
+    int currFreeRam;    // Current free RAM location
+    int first_prc;       // First process index
+    int last_prc;       // Last process index
+    int spaceAvailable; // Usable space
+    char memory[RAM_SIZE];
+} ram = {0,0,0,RAM_SIZE};
+
+inline void copyOnRam(char* source, int size) {
+    // Warning: No bound checking
+    memcpy(&ram.memory[ram.currFreeRam], source, size);
+    ram.currFreeRam += size;
+}
+
+struct SWAP {
+    int currFreeSwap;   // Current free Swap location
+    int first_prc;       // First process index
+    int last_prc;       // Last process index
+    int spaceAvailable; // Usable space
+    char memory[SWAP_SIZE];
+} swap = {0,0,0,SWAP_SIZE};
+
+inline void copyOnSwap(char* source, int size) {
+    // Warning: No bound checking
+    memcpy(&swap.memory[swap.currFreeSwap], source, size);
+    swap.currFreeSwap += size;
+}
+
+int    ID = 0; // Process ID
+int sz_ID = sizeof(ID);
+inline void setID(char* dir) {
+    IntToChar(ID++, dir);
+}
+
 typedef struct processheader {
+    int  ID;
     char name[NAME_SIZE];
-    int  size; // Size in bytes.
-    int  TTP;  // Total time of processing.
-    int  PT;   // Processor time
+    int  size;     // Size in bytes.
+    int  offset;    // Space between processes
+    int  TTP;      // Total time of processing.
+    int  PT;       // Processor time
+    int  previous_prc; // Index of previous process
 }ProcessHeader;
+int pos_ID    = 0,// Position (in bytes) of the attributes of ProcessHeader
+    pos_name  = 4,
+    pos_size  = NAME_SIZE + 4,
+    pos_offset = NAME_SIZE + 8,
+    pos_TTP   = NAME_SIZE + 12,
+    pos_PT    = NAME_SIZE + 16,
+    pos_previousPrc = NAME_SIZE + 20;
 int prcHeadSize = sizeof(ProcessHeader);
+
+// -Returns process ID. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline int processID(char* prc_dirc) {
+    return charToInt(&prc_dirc[pos_ID]);
+}
+
+// -Sets the process ID. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssID(char* prc_dirc, int _ID) {
+    IntToChar(_ID, &prc_dirc[pos_ID]);
+}
+
+// -Copy the process name in 'dest'. The pointer indicates the direction of
+//  process, more specifically, the process header.
+inline void processName(char* prc_dirc, char* dest) {
+    for(int i = 0; i < NAME_SIZE; i++) {
+        dest[i] = prc_dirc[pos_name + i];
+    }
+}
+
+// -Sets the process name. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssName(char* prc_dirc, char* name) {
+    for(int i = 0; i < NAME_SIZE; i++) {
+        prc_dirc[pos_name + i] = name[i];
+    }
+}
 
 // -Returns process size. The pointer indicates the direction of process,
 //  more specifically, the process header.
 inline int processSize(char* prc_dirc) {
-    return charToInt(&prc_dirc[NAME_SIZE]);
+    return charToInt(&prc_dirc[pos_size]);
+}
+
+// -Sets the process size. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssSize(char* prc_dirc, int size) {
+    IntToChar(size, &prc_dirc[pos_size]);
+}
+
+// -Returns process offset. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline int processOffset(char* prc_dirc) {
+    return charToInt(&prc_dirc[pos_offset]);
+}
+
+// -Sets the process offset. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssOffset(char* prc_dirc, int offset) {
+    IntToChar(offset, &prc_dirc[pos_offset]);
+}
+
+// -Returns process TTP. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline int processTTP(char* prc_dirc) {
+    return charToInt(&prc_dirc[pos_TTP]);
+}
+
+// -Sets the process TTP. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssTTP(char* prc_dirc, int TTP) {
+    IntToChar(TTP, &prc_dirc[pos_TTP]);
+}
+
+// -Returns process PT. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline int processPT(char* prc_dirc) {
+    return charToInt(&prc_dirc[pos_PT]);
+}
+
+// -Sets the process PT. The pointer indicates the direction of process,
+//  more specifically, the process header.
+inline void setPrcssPT(char* prc_dirc, int PT) {
+    IntToChar(PT, &prc_dirc[pos_PT]);
+}
+
+// -Returns process previous_prc. The pointer indicates the direction of
+//  process, more specifically, the process header.
+inline int processPrevPrc(char* prc_dirc) {
+    return charToInt(&prc_dirc[pos_previousPrc]);
+}
+
+// -Sets the process previous process. The pointer indicates the direction of
+//  process, more specifically, the process header.
+inline void setPrcssPrevPrc(char* prc_dirc, int prevPrc) {
+    IntToChar(prevPrc, &prc_dirc[pos_previousPrc]);
 }
 
 typedef struct page {
@@ -65,6 +185,12 @@ struct BUFFER {       // -New processes can be allocated just at the end.
     char memory[BUFF_SIZE];
 } buffer = {0,0,BUFF_SIZE};
 
+inline void resetBuffer() {
+    buffer.firstIndexAvailable = 0;
+    buffer.firstProcIndex = 0;
+    buffer.spaceAvailable = BUFF_SIZE;
+}
+
 void printBytes(const char* bytes, int len);
 
 // Print the bytes of the buffer organized in its correspondent sections.
@@ -80,43 +206,45 @@ void loadProcess();
 
 void viewRAM();
 
+// -Allocates process from BUFFER to SWAP.
+// -This function does not delete data from buffer.
+void loadProcessSwap(int pageNumber);
+
+void viewSwap();
+
+// -Substitutes the process in RAM that starts in the index 'prcRamInd' with
+//  the process in SWAP that starts in the index 'prcSwapInd'.
+// -This function does not changes the integer attributes of the RAM and SWAP
+//  structures.
+int swapProcess(int prcRamInd, int prcSwapInd);
+
 // Defined as Total_processing_time - Processor_time
-void Simulate(char* prc_dirc);
+void Simulate(int prcInd);
 
 // -Simulates all the process.
 void SimulateAll();
 
 int main (int argc, char *argv[])
 {
-    char name[NAME_SIZE] = {'A', 'B', 'C', 0};
+    char name[NAME_SIZE] = {'A', 'A', 'A', 0};
     srand(time(NULL));
-    newProcess(name, 3);
-    name[0]++;
-    newProcess(name, 2);
-    name[1]++;
-    newProcess(name, 4);
-    name[2]++;
-    newProcess(name, 5);
-    name[0]++;
-    newProcess(name, 7);
-    name[1]++;
-    newProcess(name, 6);
-    name[2]++;
-    newProcess(name, 8);
-    printBufferBytes();
-    printf("\n");
-    loadProcess();
-    loadProcess();
-    loadProcess();
-    loadProcess();
-    loadProcess();
-    loadProcess();
-    loadProcess();
+    int i, k;
+    for(i = 0, k = 0; i < 15; i++) {
+        newProcess(name, 30);
+        if((k = i%3) == 0) name[k]++;
+        if((k = i%3) == 1) name[k]++;
+        if((k = i%3) == 2) name[k]++;
+        loadProcess();
+        resetBuffer ();
+    }
     viewRAM();
-    SimulateAll();
-    viewRAM();
-    Simulate(&ram[4]);
-    viewRAM();
+    viewSwap();
+
+    for(i = 0; i < 5; i++) {
+        SimulateAll();
+        viewRAM();
+        viewSwap();
+    }
     return EXIT_SUCCESS;
 }
 
@@ -147,7 +275,7 @@ void printBufferBytes() {
         i += NAME_SIZE;
         printf("\nSize:  ");
         // Printing size of first process.
-        printBytes(&buffer.memory[i], 4);
+        printBytes(&buffer.memory[i], sz_int);
         // Getting size of first process.
         size.ch[0] = buffer.memory[i++];
         size.ch[1] = buffer.memory[i++];
@@ -156,7 +284,7 @@ void printBufferBytes() {
 
         printf("\nPage |  number   ||   size    ||         info*         |\n");
 
-        for(i += sz_int*2; i-t < size.in; ) {
+        for(i += sz_int*4; i-t < size.in; ) {
             printf("  %d  ", j++);
             printBytes(&buffer.memory[i], 4); i += 4;
             printBytes(&buffer.memory[i], 4); i += 4;
@@ -179,19 +307,29 @@ void newProcess(char name[NAME_SIZE], int numofPages) {
     for(i = 0; i < NAME_SIZE - 1; i++)
         buffer.memory[buffer.firstIndexAvailable++] = name[i];
     buffer.memory[buffer.firstIndexAvailable++] = 0;
-    if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
 
     // -Setting size and updating current index.
     IntToChar(size,&buffer.memory[buffer.firstIndexAvailable]);
     buffer.firstIndexAvailable += sz_int;
+
     if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
+    // -Setting offset and updating current index.
+    IntToChar(0,&buffer.memory[buffer.firstIndexAvailable]);
+    buffer.firstIndexAvailable += sz_int;
 
     // Total process time and processor time
     // TTP
     IntToChar(rand()%15 + 2,&buffer.memory[buffer.firstIndexAvailable]);
     buffer.firstIndexAvailable += sz_int;
+
     if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
+
     // PT = 0
+    IntToChar(0, &buffer.memory[buffer.firstIndexAvailable]);
+    buffer.firstIndexAvailable += sz_int;
+
+    // previous_prc == 0
     IntToChar(0, &buffer.memory[buffer.firstIndexAvailable]);
     buffer.firstIndexAvailable += sz_int;
     if(buffer.firstIndexAvailable==BUFF_SIZE) buffer.firstIndexAvailable = 0;
@@ -221,91 +359,285 @@ void newProcess(char name[NAME_SIZE], int numofPages) {
 // | ID | Process header | Pages ... | ...
 
 void loadProcess() {
-    // Supposing there is enough space in ram
-    IntChar _ID = {ID++};
-    ram[currRamLoc++] = _ID.ch[0];
-    ram[currRamLoc++] = _ID.ch[1];
-    ram[currRamLoc++] = _ID.ch[2];
-    ram[currRamLoc++] = _ID.ch[3];
-    int prcStart = currRamLoc;
+    if(ram.currFreeRam == RAM_SIZE) {
+        loadProcessSwap(-1); // RAM full
+        return;
+    }
+    int tmp = RAM_SIZE - ram.currFreeRam; // Space at the end of RAM
+
+    // In case of not be capable of allocate the ID and the process header
+    if(prcHeadSize + sz_int > tmp) {
+        IntToChar(tmp,  // Updating offset of last process
+                  &ram.memory[ram.last_prc + NAME_SIZE + sz_int]);
+        ram.currFreeRam = RAM_SIZE;
+        loadProcessSwap(-1);
+        return;
+    }
     // Supposing the Buffer is not empty
     IntChar sz; // Process size
-    sz.ch[0] = buffer.memory[buffer.firstProcIndex+4];
-    sz.ch[1] = buffer.memory[buffer.firstProcIndex+5];
-    sz.ch[2] = buffer.memory[buffer.firstProcIndex+6];
-    sz.ch[3] = buffer.memory[buffer.firstProcIndex+7];
+    sz.ch[0] = buffer.memory[buffer.firstProcIndex + NAME_SIZE];
+    sz.ch[1] = buffer.memory[buffer.firstProcIndex + NAME_SIZE + 1];
+    sz.ch[2] = buffer.memory[buffer.firstProcIndex + NAME_SIZE + 2];
+    sz.ch[3] = buffer.memory[buffer.firstProcIndex + NAME_SIZE + 3];
 
-    memcpy(&ram[currRamLoc], &buffer.memory[buffer.firstProcIndex], sz.in);
-    buffer.firstProcIndex += sz.in;
-    currRamLoc += sz.in;
+    // There is enough space for ID and header
+    IntChar _ID = {ID++};
+    ram.memory[ram.currFreeRam++] = _ID.ch[0];
+    ram.memory[ram.currFreeRam++] = _ID.ch[1];
+    ram.memory[ram.currFreeRam++] = _ID.ch[2];
+    ram.memory[ram.currFreeRam++] = _ID.ch[3];
+    int prcStart = ram.currFreeRam, pag_num = (sz.in - prcHeadSize)/pageSize;
+
+    // Loading Header
+    memcpy( &ram.memory[prcStart],
+           &buffer.memory[buffer.firstProcIndex],
+           prcHeadSize );
+    ram.currFreeRam += prcHeadSize;
 
     // Processor time
-    ram[prcStart + prcHeadSize - 4] = rand()%3 + 1;;
+    ram.memory[prcStart + NAME_SIZE + sz_int*3] = rand()%3 + 1;
+    // Previous process
+    IntToChar(ram.last_prc, &ram.memory[prcStart + NAME_SIZE + sz_int*4]);
+
+    int i; // Allocating pages
+    for(i = 0, tmp = prcHeadSize;
+        (i < pag_num) && (RAM_SIZE - ram.currFreeRam >= pageSize);
+        i++, tmp += pageSize) {
+        memcpy( &ram.memory[ram.currFreeRam],
+               &buffer.memory[buffer.firstProcIndex + tmp],
+               pageSize );
+        ram.currFreeRam += pageSize;
+    }
+
+    // Not enough space in RAM, loading in SWAP
+    if(i < pag_num) {
+        loadProcessSwap(i);
+        if(RAM_SIZE - ram.currFreeRam > 0) {
+            setPrcssOffset(&ram.memory[prcStart], RAM_SIZE - ram.currFreeRam);
+        }
+        ram.currFreeRam = RAM_SIZE;
+    } else {
+        buffer.firstProcIndex += sz.in; // Going to the next process in buffer
+    }
+    ram.last_prc = prcStart; // -This is now the last process.
+}
+
+void loadProcessSwap(int pageNumber) {
+    // Warning: No bound checking
+    // Retrieving process size
+    int prc_sz = processSize(&buffer.memory[buffer.firstProcIndex]);
+    if(pageNumber >= 0) { // Allocating part of the process
+        // -Supposing buffer.firstProcIndex is pointing to the correct page
+        int pgs_loc;
+        for(pgs_loc = prcHeadSize + pageNumber*pageSize;
+            pgs_loc < prc_sz;
+            pgs_loc += pageSize) {
+            copyOnSwap(&buffer.memory[buffer.firstProcIndex + pgs_loc],pageSize);
+            swap.first_prc += pageSize;
+        }
+        buffer.firstProcIndex += prc_sz;
+        return;
+    }
+    // Allocating the hole process
+    // Allocating ID
+    IntToChar(ID++,&swap.memory[swap.currFreeSwap]);
+    swap.currFreeSwap += sz_int;
+
+    int prcStart = swap.currFreeSwap; // Marking the beginning of the process
+    //printf("Process start = %d\n", prcStart);
+
+    memcpy(&swap.memory[prcStart],&buffer.memory[buffer.firstProcIndex], prc_sz);
+    buffer.firstProcIndex += prc_sz;
+    swap.currFreeSwap += prc_sz;
+
+    // Processor time
+    swap.memory[prcStart + NAME_SIZE + sz_int*3] = rand()%3 + 1;
+    // Previous process
+    IntToChar(swap.last_prc, &swap.memory[prcStart + NAME_SIZE + sz_int*4]);
+    swap.last_prc = prcStart; // -This is now the last process.
+    /*printf("offset in loadProcessSwap = %d\n",
+           processOffset(&swap.memory[prcStart]));*/
 }
 
 void viewRAM() {
     int i, // Runs trough bytes of the ram
         j, // Meant for the copy of contents
-        t, // Holds the value of 'i' temporarily
-        c; // Counter of cycles
+        t; // Holds the value of 'i' temporarily
     int pageAmount;
+    int offset;
     int ibuff[4];
     char cbuff[5];
     IntChar sz = {0}, tp = {0};
     ProcessHeader ph;
 
-    printf("--------------------------------RAM-------------------------"
+    printf("\n--------------------------------RAM-------------------------"
         "----------\n");
     printf("|  ID   ||  Process  ||  #Pages  || RAM loc  ||   TPT    |"
         "|    PT    |\n");
 
-    for(c = 0, i = 0; (t=i) + c < currRamLoc; c += sz_int, i += sz.in) {
+    // i will run over the ram.
+    for(i = ram.first_prc; (t=i) < ram.currFreeRam; i += sz.in) {
         // Printing ID
-        printBytesAsInt(&ram[i], sz_int, 7);
+        printBytesAsInt(&ram.memory[i], sz_int, 7);
         i += sz_int;
+
+        offset = processOffset(&ram.memory[i]); // Retrieving offset
+
         // Retrieving process name.
-        for(j = 0; j < NAME_SIZE; j++) ph.name[j] = ram[i+j];
+        for(j = 0; j < NAME_SIZE; j++) ph.name[j] = ram.memory[i+j];
         printf("|");
         printCentered(ph.name, 11);
         printf("|");
-        i += sz_int;
+        i += NAME_SIZE;
         // Retrieving process size.
-        for(j = 0; j < 4; j++) sz.ch[j] = ram[i+j];
-        i += sz_int;
+        for(j = 0; j < 4; j++) sz.ch[j] = ram.memory[i+j];
+        i += sz_int*2; // Skipping the size and the offset
         // Naive way of calculating the number of pages.
         pageAmount = (sz.in - prcHeadSize)/pageSize;
-        toString (pageAmount, cbuff);
+        toString(pageAmount, cbuff);
         ibuff[0] = pageAmount;
         ibuff[1] = t;
         // Total time of processing.
-        for(j = 0; j < 4; j++) tp.ch[j] = ram[i+j];
+        for(j = 0; j < 4; j++) tp.ch[j] = ram.memory[i+j];
         i += sz_int;
         ibuff[2] = tp.in;
         // Processor time
-        for(j = 0; j < 4; j++) tp.ch[j] = ram[i+j];
+        for(j = 0; j < 4; j++) tp.ch[j] = ram.memory[i+j];
         i += sz_int;
         ibuff[3] = tp.in;
         printTabularForm(ibuff, _int, 4, 4, NULL, NULL);
+        i += sz_int;
         sz.in -= prcHeadSize;
+        sz.in += offset;
     }
 }
 
-void Simulate(char* prc_dirc) {
-    int ttp_ind = NAME_SIZE + sz_int, pt_ind = ttp_ind + sz_int;
-    int ttp = charToInt(&prc_dirc[ttp_ind]),  // -Getting TTP and PT
-        pt  = charToInt(&prc_dirc[pt_ind]);
+void viewSwap() {
+    int i, // Runs trough bytes of the ram
+        j, // Meant for the copy of contents
+        t; // Holds the value of 'i' temporarily
+    int pageAmount;
+    int offset;
+    int ibuff[4];
+    char cbuff[5];
+    IntChar sz = {0}, tp = {0};
+    ProcessHeader ph;
+
+    printf("\n--------------------------------Swap-------------------------"
+        "----------\n");
+    printf("|  ID   ||  Process  ||  #Pages  || SWAP loc ||   TPT    |"
+        "|    PT    |\n");
+
+    // i will run over the swap.
+    /*printf("swap.first_prc = %d\n"
+           "swap.currFreeSwap = %d\n", swap.first_prc,swap.currFreeSwap);*/
+    for(i = swap.first_prc; (t=i) < swap.currFreeSwap; i += sz.in) {
+        // Printing ID
+        printBytesAsInt(&swap.memory[i], sz_int, 7);
+        //printf("i == %d\n", i);
+        i += sz_int;
+        //printf("i == %d\n", i);
+
+        offset = processOffset(&swap.memory[i]); // Retrieving offset
+
+        // Retrieving process name.
+        for(j = 0; j < NAME_SIZE; j++) ph.name[j] = swap.memory[i+j];
+        printf("|");
+        printCentered(ph.name, 11);
+        printf("|");
+        i += NAME_SIZE;
+        // Retrieving process size.
+        for(j = 0; j < 4; j++) sz.ch[j] = swap.memory[i+j];
+        //printf("%d", sz.in);
+        i += sz_int*2; // Skipping the size and the offset
+        // Naive way of calculating the number of pages.
+        pageAmount = (sz.in - prcHeadSize)/pageSize;
+        toString(pageAmount, cbuff);
+        ibuff[0] = pageAmount;
+        ibuff[1] = t;
+        // Total time of processing.
+        for(j = 0; j < 4; j++) tp.ch[j] = swap.memory[i+j];
+        i += sz_int;
+        ibuff[2] = tp.in;
+        // Processor time
+        for(j = 0; j < 4; j++) tp.ch[j] = swap.memory[i+j];
+        i += sz_int;
+        ibuff[3] = tp.in;
+        printTabularForm(ibuff, _int, 4, 4, NULL, NULL);
+        i += sz_int;
+        sz.in -= prcHeadSize;
+        sz.in += offset; //printf("offset = %d\n", offset);
+    }
+}
+
+int swapProcess(int prcRamInd, int prcSwapInd) {
+    // -Skipping ID
+
+    char* prcInRam = &ram.memory[prcRamInd];
+    char* prevprcR = NULL;
+    int   prevPrcOffset = 0;
+    // Verifying prcInRam is not the first process in RAM
+    if(prcRamInd - sz_int != ram.first_prc) {
+        prevprcR = &ram.memory[processPrevPrc(prcInRam)];
+        prevPrcOffset = processOffset(prevprcR);
+    }
+    char* prcInSwap = &swap.memory[prcSwapInd];
+    int spaceAvailable = processSize(prcInRam) + processOffset(prcInRam) +
+                         prevPrcOffset;
+    int swapPrcSz = processSize(prcInSwap);
+
+    // -Verifying if there is enough space for the process and the ID.
+    printf("spaceAvailable = %d,swapPrcSz = %d\n", spaceAvailable, swapPrcSz);
+    if(spaceAvailable >= swapPrcSz) {
+        if(prcRamInd - sz_int == ram.first_prc) {
+            prcInRam = &ram.memory[0];
+            prcInSwap = &swap.memory[prcSwapInd - 4];
+            memcpy(prcInRam, prcInSwap, swapPrcSz + sz_int);
+            setPrcssOffset(prcInRam + sz_int,
+                          spaceAvailable - swapPrcSz + prcRamInd - sz_int);
+            ram.first_prc = 0;
+        } else {
+            prcInRam = &ram.memory[prcRamInd - prevPrcOffset - sz_int];
+            prcInSwap = &swap.memory[prcSwapInd - sz_int];
+            memcpy(prcInRam, prcInSwap, swapPrcSz + sz_int);
+            setPrcssOffset(prcInRam + sz_int, spaceAvailable - swapPrcSz);
+        }
+        return 0;
+    }
+    if(prcRamInd - sz_int == ram.first_prc) {
+        ram.first_prc+=processSize(prcInRam) + processOffset(prcInRam) + sz_int;
+    } else {
+        setPrcssOffset(prevprcR, spaceAvailable + sz_int);
+    }
+    return -1;
+}
+
+void Simulate(int prcInd) {
+    int ttp_ind = NAME_SIZE + sz_int*2, pt_ind = ttp_ind + sz_int;
+    int ttp = charToInt(&ram.memory[prcInd + ttp_ind]),// -Getting TTP and PT
+        pt  = charToInt(&ram.memory[prcInd + pt_ind]);
     ttp -= pt;
+    if(ttp <= 0) {
+        if(swapProcess(prcInd, swap.first_prc + sz_int) == 0) {
+            swap.first_prc += processSize(&swap.memory[swap.first_prc + sz_int]) +
+                         processOffset(&swap.memory[swap.first_prc + sz_int]) + sz_int;
+        }
+        return;
+    }
     pt = rand()%3 + 1;
-    IntToChar(ttp, &prc_dirc[ttp_ind]);
-    IntToChar(pt, &prc_dirc[pt_ind]);
+    IntToChar(ttp, &ram.memory[prcInd + ttp_ind]);
+    IntToChar(pt, &ram.memory[prcInd + pt_ind]);
 }
 
 void SimulateAll() {
-    int prc_sz, i;
-    char* prc_ptr;
-    for(i = sz_int; i < currRamLoc; i += prc_sz + sz_int) {
-        prc_sz = charToInt(&ram[i + NAME_SIZE]);
-        prc_ptr = &ram[i];
-        Simulate(prc_ptr);
+    int prc_sz,prc_offset, i;
+
+    for(i = ram.first_prc + sz_int;
+        i < ram.currFreeRam;
+        i += prc_sz + prc_offset + sz_int) {
+
+        prc_sz = charToInt(&ram.memory[i + NAME_SIZE]);
+        prc_offset = processOffset(&ram.memory[i]);
+        Simulate(i);
     }
 }
