@@ -258,6 +258,13 @@ inline ProcessHeader getProcessHeader(char* prc_dirc) {
     return ph;
 }
 
+inline boolean ramLastProcessIncomplete() {
+    char* last = &ram.memory[ram.last_prc];
+    if(ram.last_prc + processSize(last) + processOffset(last) > RAM_SIZE)
+        return true;
+    return false;
+}
+
 typedef struct page {
     int number;
     int   size;
@@ -291,6 +298,8 @@ void newProcess(char name[NAME_SIZE], int numofPages);
 // -This function does not delete data from buffer.
 void loadProcess();
 
+void terminateProcess(int prcInd);
+
 void viewRAM();
 
 // -Allocates process from BUFFER to SWAP.
@@ -304,6 +313,9 @@ void viewSwap();
 // -This function does not changes the integer attributes of the RAM and SWAP
 //  structures.
 int swapProcess(int prcRamInd, int prcSwapInd);
+
+// -Same as swapProcess but with the last process of ram.
+int swapWithLastRamProcess(int prcRamInd);
 
 // Defined as Total_processing_time - Processor_time
 void Simulate(int prcInd);
@@ -330,11 +342,18 @@ int main (int argc, char *argv[])
     viewRAM();
     viewSwap();
 
-    for(i = 0; i < 5; i++) {
+    /*for(i = 0; i < 5; i++) {
+        SimulateAll();
+        viewRAM();
+        viewSwap();
+    }*/
+
+    while(ramIsEmpty() == false) {
         SimulateAll();
         viewRAM();
         viewSwap();
     }
+
     return EXIT_SUCCESS;
 }
 //////////////////////////////////////////////////////////////////////////////
@@ -517,6 +536,27 @@ void loadProcess() {
     ram.last_prc = prcStart; // -This is now the last process.
 }
 
+void terminateProcess(int prcInd) {
+    char* this_prc = &ram.memory[prcInd];
+    char* prev = NULL;
+    char* next = NULL;
+    int freedSpace = processSize(this_prc) + processOffset(this_prc);
+
+    if(prcInd != ram.first_prc) {
+        prev = &ram.memory[processPrevPrc(this_prc)];
+        setPrcssOffset(prev, processOffset(prev) + freedSpace);
+        setPrcssNextPrc(prev, processNextPrc(this_prc));
+    } else {
+        ram.first_prc += freedSpace;
+        ram.spaceAvailable += freedSpace;
+        if(ramIsEmpty() == true) resetRam();
+    }
+    if(prcInd != ram.last_prc) {
+        next = &ram.memory[processNextPrc(this_prc)];
+        setPrcssPrevPrc(next, processPrevPrc(this_prc));
+    }
+}
+
 void loadProcessSwap(int pageNumber) {
     ProcessHeader ph = getProcessHeader(&buffer.memory[buffer.firstProcIndex]);
     if(pageNumber >= 0) { // Process couldn't be allocated completely in RAM
@@ -617,7 +657,7 @@ void viewRAM() {
     printf("|  ID   ||  Process  ||  #Pages  || RAM loc  ||   TPT    |"
         "|    PT    |\n");
 
-    if(ram.spaceAvailable == RAM_SIZE) return;
+    if(ramIsEmpty() == true) return;
 
     // i will run over the ram.
     for(i = ram.first_prc; (t=i) >= 0; i = ph.next_prc) {
@@ -653,7 +693,7 @@ void viewSwap() {
     printf("|  ID   ||  Process  ||  #Pages  || SWAP loc ||   TPT    |"
         "|    PT    |\n");
 
-    if(swap.spaceAvailable == SWAP_SIZE - swap.pagesOffset) return;
+    if(swapIsEmpty() == true) return;
 
     // i will run over the ram.
     for(i = swap.first_prc; (t=i) >= 0; i = ph.next_prc) {
@@ -692,7 +732,7 @@ int swapProcess(int prcRamInd, int prcSwapInd) {
                          prevPrcOffset;
     int swapPrcSz = processSize(prcInSwap);
 
-    // -Verifying if there is enough space for the process and the ID.
+    // -Verifying if there is enough space for the process.
     //printf("spaceAvailable = %d,swapPrcSz = %d\n",spaceAvailable,swapPrcSz);
     if(spaceAvailable >= swapPrcSz) {
         if(prcRamInd == ram.first_prc) {
@@ -703,6 +743,7 @@ int swapProcess(int prcRamInd, int prcSwapInd) {
                           spaceAvailable - swapPrcSz + prcRamInd);
             setPrcssNextPrc(prcInRam, next);
             setPrcssPrevPrc(prcInRam, -1);
+            if(next >= -1) setPrcssPrevPrc(&ram.memory[next], prcRamInd);
             ram.spaceAvailable -= prcRamInd;
             ram.first_prc = 0;
         } else {
@@ -712,16 +753,73 @@ int swapProcess(int prcRamInd, int prcSwapInd) {
             setPrcssOffset(prcInRam, spaceAvailable - swapPrcSz);
             setPrcssNextPrc(prcInRam, next);
             setPrcssPrevPrc(prcInRam, prev);
+            if(next >= -1) setPrcssPrevPrc(&ram.memory[next], prcRamInd);
         }
         return prcRamInd;
     }
-    if(prcRamInd == ram.first_prc) {
-        ram.first_prc += processSize(prcInRam) + processOffset(prcInRam);
-        ram.spaceAvailable += processSize(prcInRam)+processOffset(prcInRam);
-    } else {
-        setPrcssOffset(prevprcR, spaceAvailable);
+    return -1; // -Indicating failure
+}
+
+int swapWithLastRamProcess(int prcRamInd) {
+    char* prcInRam = &ram.memory[prcRamInd];
+    int next = processNextPrc(prcInRam),
+        prev = processPrevPrc(prcInRam);
+    char* prevprcR = NULL;
+    int   prevPrcOffset = 0;
+    // Verifying prcInRam is not the first process in RAM
+    if(processPrevPrc(prcInRam) >= 0) {
+        prevprcR = &ram.memory[processPrevPrc(prcInRam)];
+        prevPrcOffset = processOffset(prevprcR);
     }
-    return -1;
+    char* last_prc = &ram.memory[ram.last_prc];
+
+    int prevlastInd = processPrevPrc(last_prc);
+    char* prevlast = NULL;
+    if(prevlastInd != -1) prevlast = &ram.memory[prevlastInd];
+
+    int spaceAvailable = processSize(prcInRam) + processOffset(prcInRam) +
+                         prevPrcOffset;
+    int lastPrcSz = processSize(last_prc);
+    int szPartInRam = RAM_SIZE - ram.last_prc; // Size of the part in ram
+    int szPartInSwap = lastPrcSz - szPartInRam; // Size of the part in swap
+    if(szPartInRam > lastPrcSz) {
+        szPartInRam = lastPrcSz;
+        szPartInSwap = 0;
+    }
+
+    // -Verifying if there is enough space for the process.
+    //printf("spaceAvailable = %d,swapPrcSz = %d\n",spaceAvailable,swapPrcSz);
+    if(spaceAvailable >= lastPrcSz) {
+        if(prcRamInd == ram.first_prc) {
+            prcInRam = &ram.memory[0];
+            prcRamInd = 0;
+            memcpy(prcInRam, last_prc, szPartInRam);
+            memcpy(prcInRam + szPartInRam, swap.memory, szPartInSwap);
+            setPrcssOffset(prcInRam,
+                          spaceAvailable - lastPrcSz + prcRamInd);
+            setPrcssNextPrc(prcInRam, next);
+            setPrcssPrevPrc(prcInRam, -1);
+            if(next >= -1) setPrcssPrevPrc(&ram.memory[next], prcRamInd);
+            ram.spaceAvailable -= prcRamInd;
+            ram.first_prc = 0;
+        } else {
+            prcInRam = &ram.memory[prcRamInd - prevPrcOffset];
+            prcRamInd = prcRamInd - prevPrcOffset;
+            memcpy(prcInRam, last_prc, szPartInRam);
+            memcpy(prcInRam + szPartInRam, swap.memory, szPartInSwap);
+            setPrcssOffset(prcInRam, spaceAvailable - lastPrcSz);
+            setPrcssNextPrc(prcInRam, next);
+            setPrcssPrevPrc(prcInRam, prev);
+            if(next >= -1) setPrcssPrevPrc(&ram.memory[next], prcRamInd);
+        }
+        ram.last_prc = prevlastInd; // Updating last index
+        if(prevlast != NULL) {
+            setPrcssNextPrc(prevlast, -1);
+            setPrcssOffset(prevlast, 0);
+        }
+        return prcRamInd;
+    }
+    return -1; // Indicating failure
 }
 
 void Simulate(int prcInd) {
@@ -731,21 +829,30 @@ void Simulate(int prcInd) {
         sz  = processSize(this) + processOffset(this);
     ttp -= pt;
     if(ttp <= 0) {
-        // This condition tells us if the swap is empty or not
+        if(ramLastProcessIncomplete() == true) {
+            if(swapWithLastRamProcess(prcInd) >= 0) {}
+            else terminateProcess(prcInd);
+            return;
+        }
         if(noProcessInSwap() == false) {
             if(swapProcess(prcInd, swap.first_prc) >= 0) {
                 swap.spaceAvailable+=processSize(&swap.memory[swap.first_prc])+
                                    processOffset(&swap.memory[swap.first_prc]);
                 swap.first_prc += processSize(&swap.memory[swap.first_prc]) +
                              processOffset(&swap.memory[swap.first_prc]);
+                if(swapIsEmpty() == true) resetSwap();
+            } else {
+                terminateProcess(prcInd);
             }
         } else {
             if(prcInd == ram.first_prc) {
                 ram.first_prc += sz;
                 ram.spaceAvailable += sz;
+                if(ramIsEmpty() == true) resetRam();
             } else {
                 int prev = processPrevPrc(this);
-                setPrcssOffset(&ram.memory[prev], sz);
+                setPrcssOffset(&ram.memory[prev],
+                              processOffset(&ram.memory[prev]) + sz);
                 setPrcssNextPrc(&ram.memory[prev], processNextPrc(this));
                 if(prcInd != ram.last_prc) {
                     this = &ram.memory[processNextPrc(this)];
@@ -761,17 +868,12 @@ void Simulate(int prcInd) {
 }
 
 void SimulateAll() {
-    int prc_sz,prc_offset, i;
-
-    for(i = ram.first_prc;
-        i < ram.currFreeRam;
-        i += prc_sz + prc_offset) {
-
-        prc_sz = processSize(&ram.memory[i]);
-        prc_offset = processOffset(&ram.memory[i]);
-        if(processNextPrc(&ram.memory[i]) != -1)
+    int i;
+    for(i = ram.first_prc; i >= 0; i = processNextPrc(&ram.memory[i])) {
+        if(processNextPrc(&ram.memory[i]) != -1) // If is not last process
             Simulate(i);
-        else if(prc_sz + prc_offset + i <= RAM_SIZE)
+        else if(processSize(&ram.memory[i]) + processOffset(&ram.memory[i]) + i
+                <= RAM_SIZE)
                 Simulate(i);
     }
 }
